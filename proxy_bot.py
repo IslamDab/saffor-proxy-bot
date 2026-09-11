@@ -1,5 +1,6 @@
 import sqlite3
 import requests
+import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
@@ -9,12 +10,13 @@ ADMIN_ID = 1091526567
 
 CHANNEL_ID = -1004432263733
 CHANNEL_LINK = "https://t.me/SafforRewards"
+ORDERS_GROUP_ID = -1004200188043
 REFERRALS_REQUIRED = 3
 DAILY_FREE_LIMIT = 20
 
 PROXY_TYPES = {
     "rotate": {"name": "🔄 روتيت موبايل", "desc": "الأفضل لتكرار العروض. الـ IP يتغير مع كل جلسة. خطر الاكتشاف منخفض."},
-    "ultra":  {"name": "⚡ ألترا سوكس",  "desc": "بديل اقتصادي مناسب للعروض. وقت العمل: 1 - 8 ساعات. أحياناً يتوقف في الدقائق الأولى. لا يُرد ثمنه إذا ��وقف في الدقائق الأولى."},
+    "ultra":  {"name": "⚡ ألترا سوكس",  "desc": "بديل اقتصادي مناسب للعروض. وقت العمل: 1 - 8 ساعات. أحياناً يتوقف في الدقائق الأولى. لا يُرد ثمنه إذا توقف في الدقائق الأولى."},
 }
 
 PROXY_PLANS = {
@@ -193,6 +195,62 @@ async def safe_answer(query):
         await query.answer()
     except Exception as e:
         print(f"Answer error (ignored): {e}")
+
+async def send_order_notification(context, user_id, first_name, proxy_type, plan_name, cost, remaining_balance):
+    try:
+        topic_name = f"طلب: {first_name} ({user_id})"
+        topic = await context.bot.create_forum_topic(
+            chat_id=ORDERS_GROUP_ID,
+            name=topic_name
+        )
+        topic_id = topic.message_thread_id
+
+        await context.bot.send_message(
+            chat_id=ORDERS_GROUP_ID,
+            message_thread_id=topic_id,
+            text=f"📢 طلب بروكسي جديد!\n\n"
+                 f"👤 المستخدم: {first_name}\n"
+                 f"🆔 ID: {user_id}\n"
+                 f"🔖 النوع: {proxy_type}\n"
+                 f"⏱️ المدة: {plan_name}\n"
+                 f"💰 التكلفة: {cost} نقطة\n"
+                 f"💵 الرصيد المتبقي: {remaining_balance} نقطة\n\n"
+                 f"📌 رد على هذه الرسالة بإرسال بيانات البروكسي للمستخدم."
+        )
+        return topic_id
+    except Exception as e:
+        print(f"Error sending order notification: {e}")
+        return None
+
+async def handle_orders_group_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message:
+        return
+    if update.effective_chat.id != ORDERS_GROUP_ID:
+        return
+    if not message.reply_to_message:
+        return
+
+    original = message.reply_to_message
+    if not original.text or "🆔 ID:" not in original.text:
+        return
+
+    match = re.search(r"🆔 ID:\s*(\d+)", original.text)
+    if not match:
+        return
+
+    try:
+        user_id = int(match.group(1))
+        reply_text = message.text
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"📩 رد من فريق الدعم:\n\n{reply_text}\n\n"
+                 f"📌 استخدم هذه البيانات لتشغيل البروكسي."
+        )
+        await message.reply_text("✅ تم إرسال الرد للمستخدم.")
+    except Exception as e:
+        print(f"Error forwarding reply: {e}")
+        await message.reply_text(f"⚠️ فشل إرسال الرد: {e}")
 
 def main_keyboard():
     keyboard = [
@@ -375,13 +433,14 @@ async def buy_ultra_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     update_balance(user_id, -ULTRA_COST)
     add_proxy_request(user_id, "⚡ ألترا سوكس", "جلسة اقتصادية", ULTRA_COST)
 
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"📢 طلب ألترا سوكس جديد!\n\n"
-             f"👤 المستخدم: {query.from_user.first_name}\n"
-             f"🆔 ID: {user_id}\n"
-             f"💰 التكلفة: {ULTRA_COST} نقطة\n"
-             f"💵 الرصيد المتبقي: {get_balance(user_id)} نقطة"
+    await send_order_notification(
+        context,
+        user_id,
+        query.from_user.first_name,
+        "⚡ ألترا سوكس",
+        "جلسة اقتصادية",
+        ULTRA_COST,
+        get_balance(user_id)
     )
 
     await query.edit_message_text(
@@ -434,15 +493,14 @@ async def proxy_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     update_balance(user_id, -plan['cost'])
     add_proxy_request(user_id, ptype['name'], plan['name'], plan['cost'])
 
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"📢 طلب بروكسي جديد!\n\n"
-             f"👤 المستخدم: {query.from_user.first_name}\n"
-             f"🆔 ID: {user_id}\n"
-             f"🔖 النوع: {ptype['name']}\n"
-             f"⏱️ المدة: {plan['name']}\n"
-             f"💰 التكلفة: {plan['cost']} نقطة\n"
-             f"💵 الرصيد المتبقي: {get_balance(user_id)} نقطة"
+    await send_order_notification(
+        context,
+        user_id,
+        query.from_user.first_name,
+        ptype['name'],
+        plan['name'],
+        plan['cost'],
+        get_balance(user_id)
     )
 
     await query.edit_message_text(
@@ -485,7 +543,7 @@ async def free_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         daily_count = get_daily_count()
         daily_remaining = DAILY_FREE_LIMIT - daily_count
-        
+
         await update.message.reply_text(
             f"🎁 بروكسي مجاني\n\n"
             f"📌 ادعُ {REFERRALS_REQUIRED} أصدقاء للحصول على بروكسي مجاني لمدة ساعة.\n\n"
@@ -573,7 +631,7 @@ async def currency_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     create_user(user.id, user.username, user.first_name)
     currency = query.data.split("_")[1]
     set_preferred_currency(user.id, currency)
-    await query.edit_message_text(f"✅ تم تغيير العملة إلى {currency} بنجاح.")
+    await query.edit_message_text(f"✅ تم ت��يير العملة إلى {currency} بنجاح.")
 
 async def more_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📊 قائمة المزيد\n\nاختر من الخيارات:", reply_markup=more_keyboard())
@@ -824,6 +882,11 @@ def main():
     app.add_handler(CallbackQueryHandler(check_membership_callback, pattern="^check_membership$"))
     app.add_handler(CallbackQueryHandler(claim_free_proxy_callback, pattern="^claim_free_proxy$"))
     app.add_handler(CallbackQueryHandler(currency_callback, pattern="^cur_"))
+
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Chat(ORDERS_GROUP_ID),
+        handle_orders_group_reply
+    ))
 
     print("🤖 بوت صفور للبروكسي يعمل...")
     app.run_polling()
