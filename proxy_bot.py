@@ -88,13 +88,6 @@ def increment_referral(user_id):
     conn.commit()
     conn.close()
 
-def reset_referral(user_id):
-    conn = sqlite3.connect('proxy_bot.db')
-    c = conn.cursor()
-    c.execute("UPDATE users SET referral_count = 0 WHERE user_id=?", (user_id,))
-    conn.commit()
-    conn.close()
-
 def is_new_user(user_id):
     conn = sqlite3.connect('proxy_bot.db')
     c = conn.cursor()
@@ -596,7 +589,6 @@ async def claim_free_proxy_callback(update: Update, context: ContextTypes.DEFAUL
         )
         return
 
-    reset_referral(user_id)
     mark_proxy_as_used(proxy[0])
     increment_daily_count()
 
@@ -631,7 +623,7 @@ async def currency_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     create_user(user.id, user.username, user.first_name)
     currency = query.data.split("_")[1]
     set_preferred_currency(user.id, currency)
-    await query.edit_message_text(f"✅ تم ت��يير العملة إلى {currency} بنجاح.")
+    await query.edit_message_text(f"✅ تم تغيير العملة إلى {currency} بنجاح.")
 
 async def more_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📊 قائمة المزيد\n\nاختر من الخيارات:", reply_markup=more_keyboard())
@@ -782,114 +774,4 @@ async def admin_add_free_proxy(update: Update, context: ContextTypes.DEFAULT_TYP
     if update.effective_user.id != ADMIN_ID:
         return
     try:
-        args = context.args
-        ip, port, user, password = args[0], args[1], args[2], args[3]
-        add_free_proxy(ip, port, user, password)
-        await update.message.reply_text(f"✅ تم إضافة بروكسي مجاني: {ip}:{port}")
-    except:
-        await update.message.reply_text("⚠️ الاستخدام: /addfreeproxy <IP> <PORT> <USER> <PASS>")
-
-async def admin_list_free_proxies(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    conn = sqlite3.connect('proxy_bot.db')
-    c = conn.cursor()
-    c.execute("SELECT id, ip, port, user, password, used FROM free_proxies")
-    proxies = c.fetchall()
-    conn.close()
-    if not proxies:
-        await update.message.reply_text("📭 لا توجد بروكسيات مجانية.")
-        return
-    text = "📋 قائمة البروكسيات المجانية:\n\n"
-    for p in proxies:
-        status = "✅ متاح" if not p[5] else "❌ مستخدم"
-        text += f"ID: {p[0]} | {p[1]}:{p[2]} | {p[3]}:{p[4]} | {status}\n"
-    await update.message.reply_text(text)
-
-async def admin_delete_free_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    try:
-        proxy_id = int(context.args[0])
-        conn = sqlite3.connect('proxy_bot.db')
-        c = conn.cursor()
-        c.execute("DELETE FROM free_proxies WHERE id = ?", (proxy_id,))
-        conn.commit()
-        conn.close()
-        await update.message.reply_text(f"✅ تم حذف البروكسي رقم {proxy_id}.")
-    except:
-        await update.message.reply_text("⚠️ الاستخدام: /delfreeproxy <id>")
-
-async def admin_reset_used(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    conn = sqlite3.connect('proxy_bot.db')
-    c = conn.cursor()
-    c.execute("UPDATE free_proxies SET used = 0")
-    conn.commit()
-    conn.close()
-    await update.message.reply_text("✅ تم إعادة تعيين جميع البروكسيات.")
-
-async def admin_daily_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    count = get_daily_count()
-    await update.message.reply_text(
-        f"📊 إحصائيات اليوم\n\n"
-        f"🎁 البروكسيات المجانية الممنوحة: {count} من {DAILY_FREE_LIMIT}"
-    )
-
-def main():
-    init_db()
-    app = Application.builder().token(TOKEN).build()
-
-    proxy_check_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🔍 فحص البروكسي$"), proxy_check_start)],
-        states={
-            PROXY_CHECK_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, proxy_check_received),
-                CommandHandler("cancel", cancel_check),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_check)],
-    )
-    app.add_handler(proxy_check_conv)
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("addbalance", admin_add_balance))
-    app.add_handler(CommandHandler("addfreeproxy", admin_add_free_proxy))
-    app.add_handler(CommandHandler("listfreeproxy", admin_list_free_proxies))
-    app.add_handler(CommandHandler("delfreeproxy", admin_delete_free_proxy))
-    app.add_handler(CommandHandler("resetused", admin_reset_used))
-    app.add_handler(CommandHandler("dailystats", admin_daily_stats))
-
-    app.add_handler(MessageHandler(filters.Regex("^📡 طلب بروكسي$"), request_proxy))
-    app.add_handler(MessageHandler(filters.Regex("^👤 حسابي$"), my_account))
-    app.add_handler(MessageHandler(filters.Regex("^💰 شراء رصيد$"), buy_credit))
-    app.add_handler(MessageHandler(filters.Regex("^🎁 بروكسي مجاني$"), free_proxy))
-    app.add_handler(MessageHandler(filters.Regex("^💱 تغيير العملة$"), change_currency))
-    app.add_handler(MessageHandler(filters.Regex("^📊 المزيد$"), more_menu))
-    app.add_handler(MessageHandler(filters.Regex("^📖 دليل الاستخدام$"), guide))
-    app.add_handler(MessageHandler(filters.Regex("^💬 تواصل مع الدعم$"), support))
-    app.add_handler(MessageHandler(filters.Regex("^⬅️ عودة$"), back_to_more))
-    app.add_handler(MessageHandler(filters.Regex("^🔙 رجوع$"), back_to_main))
-
-    app.add_handler(CallbackQueryHandler(proxy_type_callback, pattern="^ptype_"))
-    app.add_handler(CallbackQueryHandler(proxy_plan_callback, pattern="^pplan_"))
-    app.add_handler(CallbackQueryHandler(proxy_type_callback, pattern="^back_to_main$"))
-    app.add_handler(CallbackQueryHandler(proxy_plan_callback, pattern="^back_to_types$"))
-    app.add_handler(CallbackQueryHandler(buy_ultra_callback, pattern="^buyultra$"))
-    app.add_handler(CallbackQueryHandler(check_membership_callback, pattern="^check_membership$"))
-    app.add_handler(CallbackQueryHandler(claim_free_proxy_callback, pattern="^claim_free_proxy$"))
-    app.add_handler(CallbackQueryHandler(currency_callback, pattern="^cur_"))
-
-    app.add_handler(MessageHandler(
-        filters.TEXT & filters.Chat(ORDERS_GROUP_ID),
-        handle_orders_group_reply
-    ))
-
-    print("🤖 بوت صفور للبروكسي يعمل...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+        args
