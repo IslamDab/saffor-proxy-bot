@@ -1,1 +1,0 @@
-# saffor-proxy-bot
