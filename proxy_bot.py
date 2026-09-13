@@ -58,7 +58,17 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0, username TEXT, first_name TEXT,
-                 preferred_currency TEXT DEFAULT 'IQD', referral_count INTEGER DEFAULT 0, referred_by INTEGER DEFAULT 0)''')
+                 preferred_currency TEXT DEFAULT 'IQD', referral_count INTEGER DEFAULT 0, referred_by INTEGER DEFAULT 0,
+                 claimed_free_proxy INTEGER DEFAULT 0)''')
+
+    # إضافة عمود claimed_free_proxy للقواعد القديمة (إذا لم يكن موجوداً)
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN claimed_free_proxy INTEGER DEFAULT 0")
+        conn.commit()
+        print("✅ تم إضافة عمود claimed_free_proxy للقاعدة الحالية")
+    except sqlite3.OperationalError:
+        pass  # العمود موجود مسبقاً
+
     c.execute('''CREATE TABLE IF NOT EXISTS proxy_requests
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, proxy_type TEXT, plan_name TEXT,
                  cost INTEGER, status TEXT DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
@@ -151,6 +161,7 @@ def set_preferred_currency(user_id, currency):
     conn.close()
 
 
+# ===== دوال البروكسي المجاني =====
 def get_available_free_proxy():
     conn = get_conn()
     c = conn.cursor()
@@ -173,6 +184,27 @@ def add_free_proxy(ip, port, user, password):
     c = conn.cursor()
     c.execute("INSERT INTO free_proxies (ip, port, user, password) VALUES (?, ?, ?, ?)",
               (ip, port, user, password))
+    conn.commit()
+    conn.close()
+
+
+def has_claimed_free_proxy(user_id):
+    """هل استلم المستخدم البروكسي المجاني من قبل؟"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT claimed_free_proxy FROM users WHERE user_id=?", (user_id,))
+    r = c.fetchone()
+    conn.close()
+    if r is None:
+        return False
+    return r[0] == 1
+
+
+def mark_free_proxy_claimed(user_id):
+    """تسجيل أن المستخدم استلم البروكسي المجاني"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE users SET claimed_free_proxy = 1 WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()
 
@@ -559,6 +591,15 @@ async def free_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ✅ فحص: هل استلم سابقاً؟
+    if has_claimed_free_proxy(user_id):
+        await update.message.reply_text(
+            f"⚠️ لقد استلمت البروكسي المجاني من قبل.\n\n"
+            f"📌 البروكسي المجاني متاح **لمرّة واحدة فقط** لكل مستخدم.\n\n"
+            f"💡 يمكنك شراء بروكسي مدفوع من زر (📡 طلب بروكسي)."
+        )
+        return
+
     ref_count = get_referral_count(user_id)
     remaining = REFERRALS_REQUIRED - ref_count
     ref_link = f"https://t.me/SafforProxyBot?start=ref_{user_id}"
@@ -611,7 +652,26 @@ async def check_membership_callback(update: Update, context: ContextTypes.DEFAUL
 async def claim_free_proxy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await safe_answer(query)
+    user_id = query.from_user.id
 
+    # ✅ فحص مزدوج: هل استلم سابقاً؟ (حماية إضافية)
+    if has_claimed_free_proxy(user_id):
+        await query.edit_message_text(
+            f"⚠️ لقد استلمت البروكسي المجاني من قبل.\n\n"
+            f"📌 البروكسي المجاني متاح **لمرّة واحدة فقط** لكل مستخدم."
+        )
+        return
+
+    # ✅ فحص: هل أكمل الإحالات؟
+    ref_count = get_referral_count(user_id)
+    if ref_count < REFERRALS_REQUIRED:
+        await query.edit_message_text(
+            f"⚠️ لم تكمل شرط الإحالات بعد.\n\n"
+            f"📊 إحالاتك: {ref_count} من {REFERRALS_REQUIRED}"
+        )
+        return
+
+    # فحص الحد اليومي
     daily_count = get_daily_count()
     if daily_count >= DAILY_FREE_LIMIT:
         await query.edit_message_text(
@@ -620,6 +680,7 @@ async def claim_free_proxy_callback(update: Update, context: ContextTypes.DEFAUL
         )
         return
 
+    # فحص توفر بروكسي
     proxy = get_available_free_proxy()
     if not proxy:
         await query.edit_message_text(
@@ -628,8 +689,10 @@ async def claim_free_proxy_callback(update: Update, context: ContextTypes.DEFAUL
         )
         return
 
+    # ✅ كل الفحوصات نجحت → تسليم البروكسي
     mark_proxy_as_used(proxy[0])
     increment_daily_count()
+    mark_free_proxy_claimed(user_id)  # ✅ تسجيل الاستلام
 
     await query.edit_message_text(
         f"🎉 تهانينا! لقد حصلت على بروكسي مجاني لمدة ساعة.\n\n"
@@ -639,7 +702,8 @@ async def claim_free_proxy_callback(update: Update, context: ContextTypes.DEFAUL
         f"User: {proxy[3]}\n"
         f"Pass: {proxy[4]}\n\n"
         f"⏳ الصلاحية: ساعة واحدة.\n"
-        f"📌 إذا لم يعمل، تواصل مع الدعم."
+        f"📌 إذا لم يعمل، تواصل مع الدعم.\n\n"
+        f"⚠️ ملاحظة: هذا البروكسي المجاني متاح **لمرّة واحدة فقط**."
     )
 
 
@@ -695,7 +759,7 @@ async def guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"4. لماذا لا يعمل البروكسي؟\n"
         f"• تأكد من صحة البيانات.\n"
         f"• تأكد من عدم انتهاء الصلاحية.\n"
-        f"• جرب بروتوكولاً آخر.",
+        f"• جرب بروكولاً آخر.",
         reply_markup=sub_section_keyboard()
     )
 
@@ -920,6 +984,31 @@ async def admin_daily_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def admin_reset_claimed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إعادة تعيين حالة claimed_free_proxy لمستخدم معين أو الجميع"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    conn = get_conn()
+    c = conn.cursor()
+
+    if context.args:
+        try:
+            user_id = int(context.args[0])
+            c.execute("UPDATE users SET claimed_free_proxy = 0 WHERE user_id=?", (user_id,))
+            conn.commit()
+            conn.close()
+            await update.message.reply_text(f"✅ تم إعادة تعيين حالة البروكسي المجاني للمستخدم {user_id}.")
+        except:
+            conn.close()
+            await update.message.reply_text("⚠️ الاستخدام: /resetclaimed [user_id]\nأو /resetclaimed (للجميع)")
+    else:
+        c.execute("UPDATE users SET claimed_free_proxy = 0")
+        conn.commit()
+        conn.close()
+        await update.message.reply_text("✅ تم إعادة تعيين حالة البروكسي المجاني لجميع المستخدمين.")
+
+
 # ========== أوامر النسخ الاحتياطي ==========
 async def admin_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إرسال نسخة احتياطية من قاعدة البيانات"""
@@ -973,7 +1062,6 @@ async def admin_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tmp_path = f"/tmp/restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
         await file.download_to_drive(tmp_path)
 
-        # نسخة أمان من القاعدة الحالية
         if os.path.exists(DB_PATH):
             safety = f"{DB_PATH}.old"
             shutil.copy(DB_PATH, safety)
@@ -1008,6 +1096,9 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("SELECT COUNT(*) FROM free_proxies WHERE used = 1")
     used_proxies = c.fetchone()[0]
 
+    c.execute("SELECT COUNT(*) FROM users WHERE claimed_free_proxy = 1")
+    claimed_count = c.fetchone()[0]
+
     c.execute("SELECT SUM(balance) FROM users")
     total_balance = c.fetchone()[0] or 0
 
@@ -1018,7 +1109,8 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👥 إجمالي المستخدمين: {total_users}\n"
         f"📦 إجمالي الطلبات: {total_requests}\n\n"
         f"🎁 بروكسيات متاحة: {available_proxies}\n"
-        f"✅ بروكسيات مستخدمة: {used_proxies}\n\n"
+        f"✅ بروكسيات مستخدمة: {used_proxies}\n"
+        f"🎯 استلموا بروكسي مجاني: {claimed_count}\n\n"
         f"💰 إجمالي النقاط: {total_balance}\n\n"
         f"📅 تاريخ اليوم: {get_today()}\n"
         f"🎁 بروكسيات اليوم: {get_daily_count()}/{DAILY_FREE_LIMIT}"
@@ -1058,6 +1150,7 @@ def main():
     app.add_handler(CommandHandler("delfreeproxy", admin_delete_free_proxy))
     app.add_handler(CommandHandler("resetused", admin_reset_used))
     app.add_handler(CommandHandler("dailystats", admin_daily_stats))
+    app.add_handler(CommandHandler("resetclaimed", admin_reset_claimed))
     app.add_handler(CommandHandler("backup", admin_backup))
     app.add_handler(CommandHandler("restore", admin_restore))
     app.add_handler(CommandHandler("stats", admin_stats))
