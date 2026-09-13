@@ -23,6 +23,11 @@ ORDERS_GROUP_ID = -1004200188043
 REFERRALS_REQUIRED = 3
 DAILY_FREE_LIMIT = 20
 
+# ===== أسعار الصرف (عدّلها من هنا فقط) =====
+POINTS_PER_USD = 100      # 100 نقطة = 1 دولار
+IQD_PER_USD = 1500        # 1 دولار = 1500 دينار
+IQD_PER_POINT = 15        # 1 نقطة = 15 دينار
+
 PROXY_TYPES = {
     "rotate": {"name": "🔄 روتيت موبايل", "desc": "الأفضل لتكرار العروض. الـ IP يتغير مع كل جلسة. خطر الاكتشاف منخفض."},
     "ultra":  {"name": "⚡ ألترا سوكس",  "desc": "بديل اقتصادي مناسب للعروض. وقت العمل: 1 - 8 ساعات. أحياناً يتوقف في الدقائق الأولى. لا يُرد ثمنه إذا توقف في الدقائق الأولى."},
@@ -358,11 +363,16 @@ async def my_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = get_balance(user_id)
     currency = get_preferred_currency(user_id)
     referrals = get_referral_count(user_id)
-    usd_value = balance * 0.006
+
+    # الحساب الصحيح: 100 نقطة = 1 دولار = 1500 دينار
+    usd_value = balance / POINTS_PER_USD
+    iqd_value = balance * IQD_PER_POINT
+
     if currency == 'IQD':
-        display = f"{usd_value * 1500:.0f} دينار عراقي"
+        display = f"{iqd_value:,.0f} دينار عراقي"
     else:
         display = f"${usd_value:.2f}"
+
     await update.message.reply_text(
         f"👤 حسابي\n\n"
         f"💰 رصيدك: {balance} نقطة\n"
